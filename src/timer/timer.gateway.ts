@@ -1,4 +1,3 @@
-import { NotFoundException } from '@nestjs/common';
 import {
   ConnectedSocket,
   MessageBody,
@@ -9,7 +8,6 @@ import {
 import { Server } from 'socket.io';
 import { IdService } from 'src/id/id.service';
 import { TimerHelper } from 'src/lib/helpers/TimerHelper';
-import { rooms } from 'src/store';
 export interface Timer {
   timerId: string;
   kickoff: number | null;
@@ -19,6 +17,7 @@ export interface Timer {
   elapsedTime: number;
 }
 import { Socket } from 'socket.io';
+import { TimerService } from './timer.service';
 interface StartTimerBody {
   timer: Timer;
   roomId: string;
@@ -26,7 +25,10 @@ interface StartTimerBody {
 
 @WebSocketGateway()
 export class TimerGateway {
-  constructor(private readonly idService: IdService) {}
+  constructor(
+    private readonly idService: IdService,
+    private readonly timerService: TimerService,
+  ) {}
   @WebSocketServer() server: Server;
 
   // Store timers by their ID
@@ -38,15 +40,13 @@ export class TimerGateway {
     @ConnectedSocket() socket: Socket,
   ): Promise<void> {
     console.log('#timerStart');
-    console.log(data);
     const {
       timer: { timerId },
       roomId,
     } = data;
     await socket.join(roomId);
-    const timers = rooms.get(roomId)!;
-    const timer = timers.get(timerId)!;
-    console.log(timerId);
+    console.log('we her');
+    const timer = await this.timerService.getTimer(timerId);
     // Check if the timer already exists and is running
     if (timer?.running) {
       console.log('Timer already running!, nothing to start');
@@ -54,22 +54,19 @@ export class TimerGateway {
     }
 
     // Initialize the timer state
-    timers.set(timerId, {
-      ...timer,
+    await this.timerService.editTimer(timerId, {
       running: true,
       kickoff: Date.now(),
     });
 
-    console.log(timers[timerId]);
     // Emit the updated timer state to all clients
     this.emitTimerUpdate(timerId, roomId);
   }
 
   // Update the timer (send elapsed time and running status)
-  private emitTimerUpdate(timerId: string, roomId: string) {
+  private async emitTimerUpdate(timerId: string, roomId: string) {
     console.log('#timerUpdate');
-    const timers = rooms.get(roomId)!;
-    const timer = timers.get(timerId)!;
+    const timer = await this.timerService.getTimer(timerId);
     if (!timer) {
       console.log('There is no timer with this ID: ', timerId);
       return; // Timer doesn't exist
@@ -83,55 +80,21 @@ export class TimerGateway {
     }
 
     console.log(`Time passed is ${TimerHelper.formatTime(timer.elapsedTime)}`);
-    console.log(timer);
+    await this.timerService.editTimer(timerId, timer);
     // Emit timer updates to all connected clients
 
     this.server.to(roomId).emit('timerUpdate', timer);
   }
 
-  @SubscribeMessage('timerCreate')
-  createTimer(@MessageBody() data: { roomId: string }): void {
-    const { roomId } = data;
-    console.log('#timerCreate');
-    console.log(roomId);
-    // check if the room exists
-    if (!rooms.has(roomId)) {
-      throw new NotFoundException(`Unable to find room with id ${roomId}`);
-    }
-    const newTimer: Timer = {
-      running: false,
-      timerId: this.idService.generateRandomAlphanumericId(),
-      elapsedTime: 0,
-      kickoff: null,
-      deadline: null,
-      lastStop: null,
-    };
-
-    rooms.get(roomId)!.set(newTimer.timerId, newTimer);
-    this.server.emit('refreshTimers');
-  }
-
-  @SubscribeMessage('timersGet')
-  getTimers(@MessageBody() roomId: string) {
-    console.log('#timerGet');
-    if (!rooms.has(roomId)) {
-      throw new NotFoundException(`Unable to find room with id ${roomId}`);
-    }
-    return rooms.get(roomId);
-  }
-
   // Stop the timer
   @SubscribeMessage('stopTimer')
-  stopTimer(@MessageBody() data: StartTimerBody) {
+  async stopTimer(@MessageBody() data: StartTimerBody) {
     console.log('#timerStop');
     const {
       timer: { timerId },
       roomId,
     } = data;
-    const timers = rooms.get(roomId)!;
-    const timer = timers.get(timerId)!;
-
-    console.log('Stopping Timer...', timer);
+    const timer = await this.timerService.getTimer(timerId);
 
     if (!timer || !timer.running) {
       console.log("Timer isn't running, nothing to stop");
@@ -142,20 +105,20 @@ export class TimerGateway {
     timer.running = false;
     timer.lastStop = Date.now();
     timer.elapsedTime = this.calculateElapsedTime(timer);
+    await this.timerService.editTimer(timerId, timer);
     // Emit the updated timer state to all clients
-    this.emitTimerUpdate(timerId, roomId);
+    await this.emitTimerUpdate(timerId, roomId);
   }
 
   // Resume the timer
   @SubscribeMessage('resumeTimer')
-  resumeTimer(@MessageBody() data: StartTimerBody): void {
+  async resumeTimer(@MessageBody() data: StartTimerBody) {
     const {
       timer: { timerId },
       roomId,
     } = data;
-    const timers = rooms.get(roomId)!;
-    const timer = timers.get(timerId)!;
-
+    const timer = await this.timerService.getTimer(timerId);
+    console.log(timer);
     if (!timer || timer.running) {
       console.log("Timer isn't stopped, nohing to resume");
       return; // Timer isn't stopped, nothing to resume
@@ -169,8 +132,10 @@ export class TimerGateway {
     timer.running = true;
     timer.lastStop = null; // Reset last stop time
 
+    await this.timerService.editTimer(timerId, timer);
+
     // Emit the updated timer state to all clients
-    this.emitTimerUpdate(timerId, roomId);
+    await this.emitTimerUpdate(timerId, roomId);
   }
 
   @SubscribeMessage('joinRoom')
@@ -178,6 +143,7 @@ export class TimerGateway {
     @MessageBody() roomName: string,
     @ConnectedSocket() client: Socket,
   ) {
+    console.log(roomName);
     await client.join(roomName);
     console.log(`${client.id} joined room: ${roomName}`);
   }

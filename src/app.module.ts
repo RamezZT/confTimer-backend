@@ -13,14 +13,17 @@ console.log(process.env.REDIS_URL);
     EventsModule,
     TimerModule,
     RoomModule,
-    // RedisModule.forRoot({
-    //   config: {
-    //     username: 'default',
-    //     password: '6sDxaBkI9fajKS4OcYQZDf2YVMcLGgpT',
-    //     host: 'redis-14275.crce220.us-east-1-4.ec2.cloud.redislabs.com',
-    //     port: 14275
-    //   }
-    // }),
+    RedisModule.forRoot({
+      type: 'single',
+      // url: 'redis-14275.crce220.us-east-1-4.ec2.cloud.redislabs.com:14275',
+      url: 'rediss://default:AU66AAIncDI3Y2JiZjRjYWNlZWU0ZDhjYjhjNjcxZGRlYzQ5YzQ1MXAyMjAxNTQ@new-cattle-20154.upstash.io:6379',
+      options: {
+        username: 'default',
+        //   host: 'redis-14275.crce220.us-east-1-4.ec2.cloud.redislabs.com',
+        //   port: 14275,
+        // },
+      },
+    }),
   ],
   controllers: [AppController],
   providers: [AppService, IdService],
