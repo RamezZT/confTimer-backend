@@ -18,38 +18,76 @@ export interface Timer {
 }
 import { Socket } from 'socket.io';
 import { TimerService } from './timer.service';
-interface StartTimerBody {
+import { Logger } from '@nestjs/common';
+type StartTimerBody = {
   timer: Timer;
   roomId: string;
+};
+
+type StopTimerBody = StartTimerBody;
+
+export enum SOCKET_EVEMTS {
+  TIMERS = 'timers',
+  REFRESH_TIMERS = 'refresh_timers',
+  CREATE_TIMER = 'create_timer',
+  GET_TIMERS = 'get_timers',
+  START_TIMER = 'start_timer',
+  TIMER_UPDATE = 'timer_update',
+  STOP_TIMER = 'stop_timer',
+  RESUME_TIMER = 'resume_timer',
 }
 
 @WebSocketGateway()
 export class TimerGateway {
+  private readonly logger = new Logger(TimerGateway.name);
   constructor(
     private readonly idService: IdService,
     private readonly timerService: TimerService,
   ) {}
   @WebSocketServer() server: Server;
 
+  // create a new timer and return all the timers
+  @SubscribeMessage(SOCKET_EVEMTS.CREATE_TIMER)
+  async createTimer(@MessageBody() data: { roomId: string }) {
+    this.logger.warn(`${SOCKET_EVEMTS.CREATE_TIMER} event triggered`);
+    await this.timerService.createTimer(data.roomId);
+    const timers = await this.timerService.getRoomTimers(data.roomId);
+
+    // This is a must so we give the client new fresh timers
+    this.server.emit(SOCKET_EVEMTS.REFRESH_TIMERS, timers);
+    return timers;
+  }
+
+  @SubscribeMessage(SOCKET_EVEMTS.GET_TIMERS)
+  async getTimers(@MessageBody() data: { roomId: string }) {
+    console.log('called ', SOCKET_EVEMTS.GET_TIMERS);
+    console.log(data.roomId);
+    const timers = await this.timerService.getRoomTimers(data.roomId);
+    console.log(timers);
+    return timers;
+  }
+
   // Store timers by their ID
 
   // Start the timer
-  @SubscribeMessage('startTimer')
+  @SubscribeMessage(SOCKET_EVEMTS.START_TIMER)
   async startTimer(
     @MessageBody() data: StartTimerBody,
     @ConnectedSocket() socket: Socket,
   ): Promise<void> {
-    console.log('#timerStart');
+    this.logger.warn(`${SOCKET_EVEMTS.START_TIMER} event triggered`);
+    console.log(data);
     const {
       timer: { timerId },
       roomId,
     } = data;
+
+    // we should fix this later so we don't have to rejoin the same room over and over
     await socket.join(roomId);
-    console.log('we her');
     const timer = await this.timerService.getTimer(timerId);
     // Check if the timer already exists and is running
     if (timer?.running) {
-      console.log('Timer already running!, nothing to start');
+      this.logger.warn('Timer already running!, nothing to start');
       return; // Timer is already running, do not restart
     }
 
@@ -60,15 +98,15 @@ export class TimerGateway {
     });
 
     // Emit the updated timer state to all clients
-    this.emitTimerUpdate(timerId, roomId);
+    await this.emitTimerUpdate(timerId, roomId);
   }
 
   // Update the timer (send elapsed time and running status)
   private async emitTimerUpdate(timerId: string, roomId: string) {
-    console.log('#timerUpdate');
+    this.logger.warn(`${SOCKET_EVEMTS.TIMER_UPDATE} event triggered`);
     const timer = await this.timerService.getTimer(timerId);
     if (!timer) {
-      console.log('There is no timer with this ID: ', timerId);
+      this.logger.error('There is no timer with this ID: ', timerId);
       return; // Timer doesn't exist
     }
 
@@ -83,13 +121,13 @@ export class TimerGateway {
     await this.timerService.editTimer(timerId, timer);
     // Emit timer updates to all connected clients
 
-    this.server.to(roomId).emit('timerUpdate', timer);
+    this.server.to(roomId).emit(SOCKET_EVEMTS.TIMER_UPDATE, timer);
   }
 
   // Stop the timer
-  @SubscribeMessage('stopTimer')
-  async stopTimer(@MessageBody() data: StartTimerBody) {
-    console.log('#timerStop');
+  @SubscribeMessage(SOCKET_EVEMTS.STOP_TIMER)
+  async stopTimer(@MessageBody() data: StopTimerBody) {
+    this.logger.warn(`${SOCKET_EVEMTS.START_TIMER} event triggered!`);
     const {
       timer: { timerId },
       roomId,
@@ -111,12 +149,13 @@ export class TimerGateway {
   }
 
   // Resume the timer
-  @SubscribeMessage('resumeTimer')
+  @SubscribeMessage(SOCKET_EVEMTS.RESUME_TIMER)
   async resumeTimer(@MessageBody() data: StartTimerBody) {
     const {
       timer: { timerId },
       roomId,
     } = data;
+    this.logger.warn(`${SOCKET_EVEMTS.RESUME_TIMER} event triggered!`);
     const timer = await this.timerService.getTimer(timerId);
     console.log(timer);
     if (!timer || timer.running) {

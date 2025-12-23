@@ -1,9 +1,11 @@
 import { InjectRedis } from '@nestjs-modules/ioredis';
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import Redis from 'ioredis';
 import { IdService } from 'src/id/id.service';
 @Injectable()
 export class RoomService {
+  private readonly logger = new Logger(RoomService.name);
+
   private static readonly ROOMS_KEY = 'rooms';
   private static readonly ROOM_KEY_PREFIX = 'room:';
   constructor(
@@ -12,6 +14,7 @@ export class RoomService {
   ) {}
   async createRoom() {
     const roomId = this.idService.generateRandomAlphanumericId();
+    this.logger.log(`creating a room with id: ${roomId}`);
 
     await this.redis.sadd('rooms', roomId);
 

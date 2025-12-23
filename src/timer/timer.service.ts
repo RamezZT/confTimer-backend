@@ -1,16 +1,19 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { IdService } from 'src/id/id.service';
 import { InjectRedis } from '@nestjs-modules/ioredis';
 import Redis from 'ioredis';
 import { Timer } from './timer.gateway';
 import { plainToClass } from 'class-transformer';
 import { RetrieveTimerDto } from './dto/retrieve-timer.dto';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class TimerService {
+  private readonly logger = new Logger(TimerService.name);
+
   constructor(
     private readonly idService: IdService,
-    @InjectRedis() private readonly redis: Redis, // Inject the Redis client
+    @InjectRedis() private readonly redis: Redis,
   ) {}
   // public createTimer(roomId: string) {
   //   // check if the room exists
@@ -34,26 +37,38 @@ export class TimerService {
   async createTimer(roomId: string) {
     const exists = await this.redis.sismember('rooms', roomId);
     if (!exists) {
-      console.log('no ROOM');
+      this.logger.error(`There is no room with id: ${roomId}`);
       throw new NotFoundException('Room not found');
     }
 
-    const timerId = this.idService.generateRandomAlphanumericId();
+    const timerId = randomUUID();
+    // const timerId = this.idService.generateRandomAlphanumericId();
 
     await this.redis.sadd(`room:${roomId}:timers`, timerId);
 
-    await this.redis.hset(`timer:${timerId}`, {
+    const timer: Timer = {
       running: false,
       timerId: timerId,
       elapsedTime: 0,
       kickoff: null,
       deadline: null,
       lastStop: null,
-    });
+    };
+    await this.redis.hset(`timer:${timerId}`, timer);
 
-    return { timerId };
+    return timer;
   }
 
+  async getRoomTimers(roomId: string) {
+    const timerIds = await this.redis.smembers(`room:${roomId}:timers`);
+    const rawTimers = await Promise.all(
+      timerIds.map((id) => this.redis.hgetall(`timer:${id}`)),
+    );
+    const timers = rawTimers.map((rawTimer) =>
+      plainToClass(RetrieveTimerDto, rawTimer),
+    );
+    return timers;
+  }
   async getTimer(timerId: string) {
     const key = `timer:${timerId}`;
 
@@ -83,17 +98,5 @@ export class TimerService {
     await this.redis.hset(`timer:${timerId}`, updatedTimer);
 
     return updatedTimer;
-  }
-
-  async getRoomTimers(roomId: string) {
-    const timerIds = await this.redis.smembers(`room:${roomId}:timers`);
-    const rawTimers = await Promise.all(
-      timerIds.map((id) => this.redis.hgetall(`timer:${id}`)),
-    );
-    const timers = rawTimers.map((rawTimer) =>
-      plainToClass(RetrieveTimerDto, rawTimer),
-    );
-
-    return timers;
   }
 }
